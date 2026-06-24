@@ -2,6 +2,174 @@
 title: "Analyzing Music Data"
 author: "Anthony Gao"
 format: html
+execute:
+  echo: false
 ---
 
+```{r}
+#| message: false
+library(tidyverse)
+```
 
+```{r}
+billboard |> 
+  select(artist, track, date.entered, wk1:wk4)
+```
+
+```{r}
+#| message: false
+n_val <- sum(!is.na(billboard$wk6))
+ggplot(billboard, aes(x = wk6)) +
+  geom_histogram(binwidth = 5, fill = "steelblue", color = "white") +
+  labs(
+    title = "Histogram of Week 6 Rankings",
+    subtitle = paste0("n = ", n_val, " songs"),
+    x = "Week 6 Rank",
+    y = "Count"
+  )
+```
+
+```{r}
+billboard |> 
+  select(wk1, wk4, wk10, wk20, wk40, wk76) |> 
+  pivot_longer(cols = everything(), names_to = "week", values_to = "rank") |> 
+  mutate(week = fct_inorder(week)) |> 
+  group_by(week) |> 
+  summarize(
+    present = sum(!is.na(rank)),
+    missing = sum(is.na(rank))
+  )
+```
+
+```{r}
+billboard |> 
+  pivot_longer(
+    cols = starts_with("wk"), 
+    names_to = "week", 
+    values_to = "rank"
+  ) |> 
+  filter(!is.na(rank)) |> 
+  mutate(week = as.integer(str_remove(week, "wk"))) |> 
+  arrange(artist, track, week) |> 
+  group_by(artist, track) |> 
+  summarize(
+    re_entered = any(diff(week) > 1), 
+    .groups = "drop"
+  ) |> 
+  count(re_entered)
+```
+
+```{r}
+#| message: false
+billboard_long <- billboard |> 
+  pivot_longer(
+    cols = starts_with("wk"),
+    names_to = "week",
+    values_to = "rank",
+    values_drop_na = TRUE
+  ) |> 
+  mutate(week = as.integer(str_remove(week, "wk")))
+
+ggplot(billboard_long, aes(x = week, y = rank, group = interaction(artist, track))) +
+  geom_line(alpha = 0.25) +
+  scale_y_reverse() +
+  labs(
+    title = "Song Rankings Over Time",
+    x = "Week",
+    y = "Rank (reversed)"
+  )
+```
+
+```{r}
+#| message: false
+# Create song-level summary
+song_summary <- billboard |> 
+  pivot_longer(
+    cols = starts_with("wk"),
+    names_to = "week",
+    values_to = "rank",
+    values_drop_na = TRUE
+  ) |> 
+  mutate(week = as.integer(str_remove(week, "wk"))) |> 
+  group_by(artist, track) |> 
+  summarize(
+    first_rank = rank[which.min(week)],
+    best_rank = min(rank),
+    first_week_at_best = min(week[rank == best_rank]),
+    total_weeks = n(),
+    .groups = "drop"
+  )
+
+# Print a preview of the song-level summary
+print("Preview of Song-Level Summary:")
+head(song_summary)
+
+# Identify the three notable songs
+fastest_no1 <- song_summary |> 
+  filter(best_rank == 1) |> 
+  slice_min(first_week_at_best, n = 1)
+
+slowest_no1 <- song_summary |> 
+  filter(best_rank == 1) |> 
+  slice_max(first_week_at_best, n = 1)
+
+longest_run_top10 <- song_summary |> 
+  filter(best_rank <= 10) |> 
+  slice_max(total_weeks, n = 1)
+
+# Combine and display
+print("Notable Songs:")
+bind_rows(
+  fastest_no1 |> mutate(notable_category = "Fastest to #1"),
+  slowest_no1 |> mutate(notable_category = "Slowest to #1"),
+  longest_run_top10 |> mutate(notable_category = "Longest Run in Top 10")
+) |> 
+  select(notable_category, artist, track, first_rank, best_rank, first_week_at_best, total_weeks)
+```
+
+```{r}
+#| cache: true
+#| message: false
+# Filter for songs that reached the top 10
+top10_songs <- billboard_long |> 
+  group_by(artist, track) |> 
+  filter(min(rank) <= 10) |> 
+  ungroup() |> 
+  mutate(
+    highlight = case_when(
+      artist == "Madonna" & track == "Music" ~ "Madonna - Music (Fastest to #1)",
+      artist == "Lonestar" & track == "Amazed" ~ "Lonestar - Amazed (Slowest to #1)",
+      artist == "Creed" & track == "Higher" ~ "Creed - Higher (Longest Top-10 Run)",
+      TRUE ~ "Other Top-10 Songs"
+    )
+  )
+
+# Plot top 10 songs, highlighting the three notable ones
+ggplot() +
+  geom_line(
+    data = filter(top10_songs, highlight == "Other Top-10 Songs"),
+    aes(x = week, y = rank, group = interaction(artist, track)),
+    color = "lightgray", alpha = 0.5
+  ) +
+  geom_line(
+    data = filter(top10_songs, highlight != "Other Top-10 Songs"),
+    aes(x = week, y = rank, group = interaction(artist, track), color = highlight),
+    linewidth = 1
+  ) +
+  scale_y_reverse() +
+  scale_color_manual(
+    values = c(
+      "Madonna - Music (Fastest to #1)" = "#E41A1C",
+      "Lonestar - Amazed (Slowest to #1)" = "#377EB8",
+      "Creed - Higher (Longest Top-10 Run)" = "#4DAF4A"
+    )
+  ) +
+  labs(
+    title = "Song Trajectories for Top-10 Billboard Hits",
+    subtitle = "Highlighting three notable songs",
+    x = "Week",
+    y = "Rank (reversed)",
+    color = "Notable Songs"
+  ) +
+  theme_minimal()
+```
